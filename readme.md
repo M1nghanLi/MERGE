@@ -19,11 +19,15 @@ It is recommended to use Anaconda with Python 3.10 (as defined in `environment.y
 ```
 conda env create -f environment.yml
 conda activate MERGE
-
 python demo_CSLIP_comparison.py
 ```
 
+## Experiment data
+https://drive.google.com/file/d/1ApFo04zt4A5dkjB-pWpQxVmSFOWdyLKV/view?usp=sharing
 
+## Checkpoints of pretained model
+- Depth-Anything-V2: https://github.com/DepthAnything/Depth-Anything-V2
+- DRUNet: https://github.com/cszn/DPIR/tree/master
 
 
 ## Repository Structure (Brief)

@@ -2,7 +2,6 @@
 Created on 2025/6/4 15:18
 
 @author: Minghan Li
-we have 3 forward model: CSLIP CLIP LIFT, so we use each forward model to create simulation data
 """
 import einops
 import torch
@@ -50,7 +49,6 @@ def get_CSLIPMeasurement(path,num,angle_dec=0,spatial_dec=0, device='cuda'):
     meas_data = A(lf_data)
     meas_data_pnp = A(lf_data_pnp)
 
-    # 返回正确的分辨率信息
     if len(lf_data.shape) == 4:
         lfresolution = [u, v, h, w]
     elif len(lf_data.shape) == 5:
@@ -83,7 +81,6 @@ def get_SinglePixelImagingMeasurement(scene='scene6_LF_Data_SPC.mat',device='cud
     meas_data = meas_data - torch.mean(meas_data)
     meas_data = meas_data / torch.max(torch.abs(meas_data)) * 0.5  # [u v n_meas]
 
-    # %% FSITA_PnP recon
     recon_shape = codes.shape[0:-1]
     A_model = CLIP_SPC(codes).to(device)
     #A = lambda x: CLIP_SP_Forward(codes, x)

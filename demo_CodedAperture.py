@@ -158,8 +158,7 @@ def return_MURDGE_componets(config):
     h,w=lfshape[-2],lfshape[-1]
 
 
-    # 1. MURDGE model
-    # Multi-GPU model parallel
+
     mp_devices = []
     try:
         if 'gpu_list' in config:
@@ -399,7 +398,7 @@ def train_model(A,meas_data,config):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        torch.cuda.empty_cache() # Aggressive cleanup to debug OOM
+        torch.cuda.empty_cache() 
         lf_input = lf_star.detach().clone()
 
         
@@ -413,15 +412,14 @@ def train_model(A,meas_data,config):
     k = MURDGE_MLP.compute_scale_alpha()
     print(k)
 
-    return final_lf.detach(), final_disparity_full.detach(), DEQ_MURDGEmodel #shape=(nu,nv,h,w), (nview,h,w,2)
-    #return lf_input.detach(), final_disparity_full.detach(), DEQ_MURDGEmodel
+    return final_lf.detach(), final_disparity_full.detach(), DEQ_MURDGEmodel 
 
 
 
 
 
 if __name__ == '__main__':
-    gpu_list = [4,7]
+    gpu_list = [0,1]
 
     num = 5
     u=v=5

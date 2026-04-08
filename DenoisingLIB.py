@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Sun Apr  7 23:36:44 2024
-
-@author: Xiaohua Feng
-"""
 import torch
 from vision_networks import *
 import einops
@@ -58,21 +52,16 @@ def denoise_net(net, opt, noisy, sigma_hat):
     # For using with the output of inr models, with range of [-1, 1] scaling to the range of [0 1] is
     # done by adding 1 and divide by 2
     
-    # 特殊处理 ffdnet_rgb: 支持 [b, 3, h, w] 输入
     if opt['denoiser'] in ['ffdnet_rgb', 'drunet_rgb']:
-        # 检查输入维度
         if noisy.dim() == 4:
-            # [b, 3, h, w] 输入
             Nz, C, Nx, Ny = noisy.shape
             is_rgb_batch = True
         elif noisy.dim() == 3:
-            # 旧格式 [Nz, Nx, Ny] - 不应该用于RGB去噪器，但保持兼容
             Nz, Nx, Ny = noisy.shape
             is_rgb_batch = False
         else:
             raise ValueError(f"Unsupported noisy shape for {opt['denoiser']}: {noisy.shape}")
     else:
-        # 其他去噪器保持原有逻辑
         Nz, Nx, Ny = noisy.shape
         is_rgb_batch = False
 
@@ -86,15 +75,10 @@ def denoise_net(net, opt, noisy, sigma_hat):
         padw = W - w if w % img_multiple_of != 0 else 0
         noisy = nn.functional.pad(noisy, (0, padw, 0, padh), mode='reflect')
     
-    # 更新填充后的尺寸
     if opt['denoiser'] in ['ffdnet_rgb', 'drunet_rgb'] and is_rgb_batch:
         Nz, C, Nx, Ny = noisy.shape
     else:
         Nz, Nx, Ny = noisy.shape
-
-    # 确保噪声与网络在同一设备/数据类型，然后再做归一化计算。
-    # 备注：训练中可能启用 AMP(bf16/fp16)。FFDNet 等网络参数通常为 float32，
-    # 若直接传入 bf16 会触发 conv2d 的 input/bias dtype 不一致错误。
     if isinstance(net, torch.nn.Module):
         param = next(net.parameters())
         target_device = param.device
@@ -103,7 +87,6 @@ def denoise_net(net, opt, noisy, sigma_hat):
         target_device = noisy.device
         target_dtype = noisy.dtype
     noisy = noisy.to(device=target_device, dtype=target_dtype)
-    # 归一化到 [0,1]
     min_val = torch.min(noisy)
     noisy3D = noisy - min_val
     max_val = torch.max(noisy3D)
@@ -116,12 +99,10 @@ def denoise_net(net, opt, noisy, sigma_hat):
             img[K,:,:] = net(noisy3D[K,:,:].unsqueeze(0).unsqueeze(0), sigma).squeeze(0).squeeze(0)
     
     elif(opt['denoiser'] == 'ffdnet_rgb'):
-        # FFDNet RGB: 支持批量 [b, 3, h, w] 处理
         if is_rgb_batch:
             sigma = torch.full((Nz, 1, 1, 1), sigma_hat, device=target_device, dtype=noisy3D.dtype)
             img = net(noisy3D, sigma)
         else:
-            # 保持旧的逐帧处理逻辑（虽然不推荐用于RGB）
             sigma = torch.full((1,1,1,1), sigma_hat, device=target_device, dtype=noisy3D.dtype)
             for K in range(noisy3D.shape[0]):
                 img[K,:,:] = net(noisy3D[K,:,:].unsqueeze(0).unsqueeze(0), sigma).squeeze(0).squeeze(0)
@@ -142,29 +123,20 @@ def denoise_net(net, opt, noisy, sigma_hat):
         for K in range(noisy3D.shape[0]):
             img[K, :, :] = net(torch.cat([noisy3D[K, :, :].unsqueeze(0).unsqueeze(0),noise_map], dim=1)).squeeze(0).squeeze(0)
     elif (opt['denoiser'] == 'ircnn'):
-        # 新增 IRCNN 支持：构造 sigma 张量并传递
         sigma = torch.full((1,1,1,1), sigma_hat).type_as(noisy3D)
         for K in range(noisy3D.shape[0]):
             img[K,:,:] = net(noisy3D[K,:,:].unsqueeze(0).unsqueeze(0), sigma).squeeze(0).squeeze(0)
-    #elif (opt['denoiser'] == 'restormer_ming'):
 
     else:
         ''' This case can deal with restormer (~10 times slower), KBNet (~10 times slower), swinir (~100 times slower than drunet)
             Refers to the RED by fixed point projection paper (RED-PRO) for using denoisiers with fixed sigma
         '''
-        # with torch.no_grad():
-        #     for K in range(img.shape[0]):
-        #         denoised_tmp = net(noisy3D[K,:,:].unsqueeze(0).unsqueeze(0)).squeeze(0).squeeze(0)
-        #         img[K,:,:] = denoised_tmp * sigma_hat + noisy3D[K,:,:] * (1-sigma_hat)
         for K in range(img.shape[0]):
-            #img[K,:,:] = net(noisy3D[K,:,:].unsqueeze(0).unsqueeze(0)).squeeze(0).squeeze(0)
             denoised_tmp = net(noisy3D[K, :, :].unsqueeze(0).unsqueeze(0)).squeeze(0).squeeze(0)
             img[K, :, :] = denoised_tmp * sigma_hat + noisy3D[K, :, :] * (1 - sigma_hat)
                 
     img = img*max_val + min_val
-    #img = img * 2- 1
     
-    # 裁剪回原始尺寸
     if opt['denoiser'] in ['ffdnet_rgb', 'drunet_rgb'] and is_rgb_batch:
         img = img[:, :, :h, :w]
     else:
@@ -187,7 +159,6 @@ def tv3d_loss(img):
     """
     w_variance = torch.sum(torch.pow(img[:,:,:-1] - img[:,:,1:], 2))
     h_variance = torch.sum(torch.pow(img[:,:-1,:] - img[:,1:,:], 2))
-    # z_variance = torch.sum(torch.pow(img[:-1,:,:] - img[1:,:,:], 2))
     loss = torch.sqrt(h_variance + w_variance ) # + z_variance
     return loss
 
@@ -196,8 +167,6 @@ class TVDenoise(torch.nn.Module):
     def __init__(self, noisy_image, reg_param):
         super(TVDenoise, self).__init__()
         self.l2_term = torch.nn.MSELoss(reduction='mean')
-        # self.regularization_term = tv_loss()
-        # create the variable which will be optimized to produce the noise free image
         self.clean_image = torch.nn.Parameter(data=noisy_image.clone(), requires_grad=True)
         self.noisy_image = noisy_image
         self.reg_param = reg_param
@@ -465,12 +434,6 @@ def denoise_rvrt(model, vol, sigma_hat):
 
 
 def load_model_FDnCNN():
-    """
-    加载 FDnCNN 预训练模型
-    参数 opt 可额外提供:
-        opt['fdncnn_model'] : 'fdncnn_gray' (默认) /
-                              'fdncnn_color' 等
-    """
     import os, torch
     from models.network_dncnn import FDnCNN as net
 

@@ -1614,5 +1614,3 @@ def light_field_list_to_video(
 
     
     
-   
-    

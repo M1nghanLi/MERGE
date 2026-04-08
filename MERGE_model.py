@@ -24,8 +24,6 @@ def coo_gen(im_shape):
     coo = torch.cat( (y, x) , dim=1)
     return coo
 
-
-
 class RealGaborLayer(nn.Module):
     '''
         Implicit representation with Gabor nonlinearity

@@ -18,18 +18,15 @@ from DenoisingLIB import *
 class DEQ_MERGE(nn.Module):
     def __init__(self, MERGE_MLP, depthestimator, denoiser, transfomation_param, lfshape, disp_max_value):
         super().__init__()
-        # register submodules / parameters
         self.MERGE_MLP = MERGE_MLP
         self.depthestimator = depthestimator
         self.denoiser = denoiser
-        # ensure transformation params are registered as nn.Parameter so they show up in .parameters()
         if isinstance(transfomation_param, torch.nn.Parameter):
             self.transfomation_param = transfomation_param
         else:
             self.transfomation_param = torch.nn.Parameter(transfomation_param)
         self.coo_im = coo_gen((lfshape[-2], lfshape[-1]))
 
-        #生成一个[h,w]形状的待优化变量
         if len(lfshape)==4:
             H, W=lfshape[-2], lfshape[-1]
             self.bias_img = torch.nn.Parameter(torch.zeros(1, 1, H, W))
@@ -49,7 +46,6 @@ class DEQ_MERGE(nn.Module):
             guide_img = guide_img + bias_on_device
             guide_img = guide_img.expand(1, 3, -1, -1)
         elif lf.dim() == 5:
-            # RGB模式: lf shape = [nu, nv, 3, h, w]
             guide_img = lf[u//2,v//2].clone().unsqueeze(0)  # [1, 3, h, w]
             bias_on_device = self.bias_img.to(guide_img.device, non_blocking=True)
             guide_img = guide_img + bias_on_device
@@ -60,19 +56,13 @@ class DEQ_MERGE(nn.Module):
         disparity_relative = self.depthestimator(guide_img).squeeze(0)/self.disp_max_value  # shape=(h,w)
         disparity_abs = torch.tanh(self.transfomation_param[0].to(disparity_relative.device) * disparity_relative 
                                    + self.transfomation_param[1].to(disparity_relative.device))
-        # let the MERGE_MLP handle device placement (it may be multi-GPU);
-        # pass coordinates and disparity as-is and let the mlp move tensors to segments.
         lf_recon_raw, _ = self.MERGE_MLP(self.coo_im, disparity_abs)
         
-        # RGB vs 灰度重排
         if lf.dim() == 4:
-            # 灰度: lf_recon_raw shape = [(nu*nv*h*w), 1]
             lf_recon = einops.rearrange(lf_recon_raw.squeeze(-1), '(nu nv h w) -> nu nv h w', nu=u, h=h, w=w)
         else:
-            # RGB: lf_recon_raw shape = [(nu*nv*h*w), 3]
             lf_recon = einops.rearrange(lf_recon_raw, '(nu nv h w) c -> nu nv c h w', nu=u, nv=v, h=h, w=w, c=3)
         
-        # call denoiser (it should internally handle device), then move to input lf device
         lf_recon = self.denoiser(lf_recon).to(lf.device)
 
         return lf_recon
@@ -83,62 +73,28 @@ class DEQ_MERGE(nn.Module):
             h,w = lf.shape[-2:]
             if lf.dim() == 4:
                 guide_img = lf[u//2,v//2].clone().unsqueeze(0).unsqueeze(0)
-                # Move bias to guide_img's device (for consistency with forward)
                 bias_on_device = self.bias_img.to(guide_img.device, non_blocking=True)
                 guide_img = guide_img + bias_on_device
                 guide_img = guide_img.expand(1, 3, -1, -1)
             elif lf.dim() == 5:
-                # RGB模式: lf shape = [nu, nv, 3, h, w]
                 guide_img = lf[u//2,v//2].clone().unsqueeze(0)  # [1, 3, h, w]
-                # Move bias to guide_img's device (for consistency with forward)
                 bias_on_device = self.bias_img.to(guide_img.device, non_blocking=True)
                 guide_img = guide_img + bias_on_device
-            #===========test========
-            # lflf = lf.clone()
-            # lflf[u//2,v//2] = guide_img.squeeze(0)
-            # lflf = einops.rearrange(lflf, 'nu nv c h w -> (nu nv) c h w')
-            # disparity_relative = self.depthestimator(lflf).squeeze(0)/self.disp_max_value  # shape=(h,w)
-
-            #=======================
- 
             
             disparity_relative = self.depthestimator(guide_img).squeeze(0)/self.disp_max_value  # shape=(h,w)
             disparity_abs = torch.tanh(self.transfomation_param[0].to(disparity_relative.device) * disparity_relative 
                                     + self.transfomation_param[1].to(disparity_relative.device))
-            # pass raw coo_im and disparity to MLP and let it manage device movement
             lf_recon_raw, disparity_allview_raw = self.MERGE_MLP(self.coo_im, disparity_abs)
             
-            # RGB vs 灰度重排
             if lf.dim() == 4:
-                # 灰度
                 lf_recon = einops.rearrange(lf_recon_raw.squeeze(-1), '(nu nv h w) -> nu nv h w', nu=u, h=h, w=w)
             else:
-                # RGB
                 lf_recon = einops.rearrange(lf_recon_raw, '(nu nv h w) c -> nu nv c h w', nu=u, nv=v, h=h, w=w, c=3)
             
             lf_recon = self.denoiser(lf_recon).to(lf.device)
             disparity_allview = einops.rearrange(disparity_allview_raw, '(nview h w) xy -> nview h w xy', h=h, w=w, xy=2)
         return lf_recon, disparity_allview
-    def compute_base_disparity(self,lf):
-        with torch.no_grad():
-            u,v = lf.shape[:2]
-            h,w = lf.shape[-2:]
-            if lf.dim() == 4:
-                guide_img = lf[u//2,v//2].clone().unsqueeze(0).unsqueeze(0)
-                # Move bias to guide_img's device (for consistency with forward)
-                bias_on_device = self.bias_img.to(guide_img.device, non_blocking=True)
-                guide_img = guide_img + bias_on_device
-                guide_img = guide_img.expand(1, 3, -1, -1)
-            elif lf.dim() == 5:
-                # RGB模式: lf shape = [nu, nv, 3, h, w]
-                guide_img = lf[u//2,v//2].clone().unsqueeze(0)  # [1, 3, h, w]
-                # Move bias to guide_img's device (for consistency with forward)
-                bias_on_device = self.bias_img.to(guide_img.device, non_blocking=True)
-                guide_img = guide_img + bias_on_device
-            disparity_relative = self.depthestimator(guide_img).squeeze(0)/self.disp_max_value  # shape=(h,w)
-            disparity_abs = torch.tanh(self.transfomation_param[0].to(disparity_relative.device) * disparity_relative 
-                                    + self.transfomation_param[1].to(disparity_relative.device))
-        return disparity_abs
+
 
 def return_MERGE_componets(config):
 
@@ -157,8 +113,7 @@ def return_MERGE_componets(config):
     h,w=lfshape[-2],lfshape[-1]
 
 
-    # 1. MERGE model
-    # Multi-GPU model parallel
+
     mp_devices = []
     try:
         if 'gpu_list' in config:
@@ -180,7 +135,6 @@ def return_MERGE_componets(config):
         print(f"[GPU Strategy] Error: {e}")
         mp_devices = []
 
-    # 使用改进的v2版本以获得更好的GPU负载均衡
     if len(mp_devices) > 0 :
         if config['scale_alpha_mode'] =='learned':
             MERGE_MLP = COLF_Wire_rand_multigpu(  
@@ -192,7 +146,7 @@ def return_MERGE_componets(config):
                 hash_length=(h, w),
                 omega_0=omega0,
                 sigma_0=sigma0,
-                need_split=True,  # 多GPU时通常不需要chunk分割
+                need_split=True,  
                 mirror=config.get('MLP_mirror', False),
                 device=main_device,
                 chunk_size=2**12,
@@ -208,7 +162,7 @@ def return_MERGE_componets(config):
                 hash_length=(h, w),
                 omega_0=omega0,
                 sigma_0=sigma0,
-                need_split=True,  # 多GPU时通常不需要chunk分割
+                need_split=True, 
                 mirror=config.get('MLP_mirror', False),
                 device=main_device,
                 chunk_size=2**12,
@@ -270,7 +224,6 @@ def train_model(A,meas_data,config):
     H,W=lfshape[-2],lfshape[-1]
     lr = config['lr']
     
-    # 确保 meas_data 在正确的设备上
     meas_data = meas_data.to(main_device)
     
     coo_im = coo_gen((H, W)).to(main_device)
@@ -400,9 +353,9 @@ if __name__ == '__main__':
     save_dir = f'CLIP_output'
 
 
-    gpu_id = 1
+    gpu_id = 0
     device = f'cuda:{gpu_id}'
-    codes,meas_data,A,AT,lfresolution,lf_data = get_SinglePixelImagingMeasurement(scene=f'scene{2}_LF_Data_SPC.mat', device=device)
+    codes,meas_data,A,AT,lfresolution,lf_data = get_SinglePixelImagingMeasurement(scene=f'scene{1}_LF_Data_SPC.mat', device=device)
     
     #meas_data = (meas_data + torch.randn_like(meas_data)*noise_level/2).clamp_(min=0)
 
@@ -416,24 +369,24 @@ if __name__ == '__main__':
     config['lfshape']           = lfshape
     config['lr']                = 5e-3
     config['S1_iter']           = 400
-    config['S2_iter']           = 200   #实验数据120
+    config['S2_iter']           = 200   
     config['gpu_list']          = [gpu_id]
     config['main_device']       = config['gpu_list'][0]
     config['depth_device']      = config['gpu_list'][0]
     config['denoiser_device']   = config['gpu_list'][0]
-    config['depthmodelname']    = 'depthanythingb'  
+    config['depthmodelname']    = 'depthanythings'  
     # 'depthanythingb'/'depthanythingl'/'depthanythings'/'zoedepth'/'vggt' / 'depthanything3gl'/'depthanything3l'/'depthpro'
     config['denoiser']          = 'ffdnet'
-    config['lambda']            = 9e-2  #6e-2
+    config['lambda']            = 6e-2  #6e-2
     config['MLPhiddenlayers']   = 3
-    config['MLPhiddenfeatures'] = 256   #实验数据256
-    config['MLPomega0']         = 5.0  #实验数据10
-    config['MLPsigma0']         = 5.0  #实验数据10
-    config['need_iter_disp']    = False  # 是否在训练过程中保存中间视差结果
-    config['delay_bias']        = True  # 训练过程中是否延迟bias_img的训练，结合config['bias_start_iter']
+    config['MLPhiddenfeatures'] = 256  
+    config['MLPomega0']         = 5.0  
+    config['MLPsigma0']         = 5.0  
+    config['need_iter_disp']    = False  
+    config['delay_bias']        = True  
     config['bias_start_iter']   = 80
     config['DEQ_cycle']         = 1
-    config['DEQstart_iter']     = 800  # 从该迭代开始使用DEQ训练 一次anderson求解效果还可以
+    config['DEQstart_iter']     = 800  
     config['scale_alpha_mode']  = 'learned' # 'finetune' or 'learned'
     #with open(os.devnull, 'w') as fnull: 
         #with contextlib.redirect_stdout(fnull): 

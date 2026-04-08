@@ -24,12 +24,7 @@ def _make_patch_positions(h: int, w: int, patch_size: int, stride: int, device):
 
 
 def _extract_all_patches(img: torch.Tensor, patch_size: int, pad: int = 0):
-    """
-    img: [c,h,w]
-    returns:
-        patches: [L,c,k,k]
-        grid_w: int
-    """
+
     if pad > 0:
         img = F.pad(img.unsqueeze(0), (pad, pad, pad, pad), mode="reflect").squeeze(0)
     c, h, w = img.shape
@@ -41,11 +36,7 @@ def _extract_all_patches(img: torch.Tensor, patch_size: int, pad: int = 0):
 
 
 def _gather_patches_by_positions(patches: torch.Tensor, grid_w: int, positions: torch.Tensor):
-    """
-    patches: [L,c,k,k]
-    positions: [P,2] in top-left coordinates
-    returns: [P,c,k,k]
-    """
+
     idx = positions[:, 0] * grid_w + positions[:, 1]
     return patches[idx.long()]
 
@@ -67,17 +58,7 @@ def _search_shifts_and_gather(
     disp_radius: int,
     search_chunk: int,
 ):
-    """
-    Vectorized disparity search relative to the center view.
 
-    Args:
-        lf: [u,v,c,h,w]
-        positions: [P,2]
-    Returns:
-        patches4d: [P,u,v,c,k,k]
-        shift_ids: [P,u,v]  integer offset indices
-        offsets: [S,2]
-    """
     device = lf.device
     u, v, c, h, w = lf.shape
     k = patch_size
@@ -139,16 +120,6 @@ def _gather_with_shift_ids(
     offsets: torch.Tensor,
     gather_chunk: int,
 ):
-    """
-    Gather disparity-compensated patches using already estimated shift_ids.
-
-    Args:
-        lf: [u,v,c,h,w]
-        shift_ids: [P,u,v]
-        offsets: [S,2]
-    Returns:
-        patches4d: [P,u,v,c,k,k]
-    """
     device = lf.device
     u, v, c, h, w = lf.shape
     k = patch_size
@@ -188,14 +159,6 @@ def _group_similar_vectorized(
     max_group_size: int,
     group_pool: int = 4,
 ):
-    """
-    Fast approximate grouping:
-    - use mean-over-angular feature
-    - optional adaptive avg pool to reduce feature dimension
-    - local window candidates via unfold
-    returns:
-        group_idx: [P, N]
-    """
     device = patches4d.device
     P, u, v, c, k, _ = patches4d.shape
 
@@ -232,12 +195,6 @@ def _group_similar_vectorized(
 
 
 def _hard_threshold_groups(groups: torch.Tensor, sigma: float, lambda_hard: float):
-    """
-    groups: [B,N,u,v,c,k,k]
-    returns:
-        est: [B,N,u,v,c,k,k]
-        weight: [B]
-    """
     x = groups.permute(0, 2, 3, 4, 5, 6, 1).contiguous()  # [B,u,v,c,k,k,N]
     coeff = torch.fft.fftn(x, dim=(1, 2, 4, 5, 6), norm="ortho")
     thr = lambda_hard * sigma
@@ -252,12 +209,6 @@ def _hard_threshold_groups(groups: torch.Tensor, sigma: float, lambda_hard: floa
 
 
 def _wiener_groups(noisy_groups: torch.Tensor, basic_groups: torch.Tensor, sigma: float):
-    """
-    noisy_groups/basic_groups: [B,N,u,v,c,k,k]
-    returns:
-        est: [B,N,u,v,c,k,k]
-        weight: [B]
-    """
     y = noisy_groups.permute(0, 2, 3, 4, 5, 6, 1).contiguous()   # [B,u,v,c,k,k,N]
     b = basic_groups.permute(0, 2, 3, 4, 5, 6, 1).contiguous()
 
@@ -328,21 +279,18 @@ def _lfbm5d_stage_fast(
     group_pool: int,
     transform_chunk: int,
 ):
-    """
-    stage: 'hard' or 'wiener'
-    """
     device = noisy_lf.device
     U, V, C, H, W = noisy_lf.shape
 
     positions, gy, gx = _make_patch_positions(H, W, patch_size, stride, device=device)
     P = positions.shape[0]
 
-    # 1) search disparity-compensated 4D patches on match_lf
+
     match_patches4d, shift_ids, offsets = _search_shifts_and_gather(
         match_lf, positions, patch_size, disp_radius, search_chunk=search_chunk
-    )  # [P,U,V,C,K,K], [P,U,V], [S,2]
+    )  
 
-    # 2) gather noisy patches using same shifts if Wiener stage
+
     if stage == "wiener":
         noisy_patches4d = _gather_with_shift_ids(
             noisy_lf, positions, patch_size, disp_radius, shift_ids, offsets, gather_chunk=search_chunk
@@ -350,7 +298,7 @@ def _lfbm5d_stage_fast(
     else:
         noisy_patches4d = match_patches4d
 
-    # 3) local approximate grouping (vectorized)
+
     group_idx = _group_similar_vectorized(
         match_patches4d,
         gy=gy,
@@ -361,7 +309,7 @@ def _lfbm5d_stage_fast(
         group_pool=group_pool,
     )  # [P,N]
 
-    disparities = offsets[shift_ids]  # [P,U,V,2]
+    disparities = offsets[shift_ids]  
 
     out_sum = torch.zeros_like(noisy_lf)
     out_wgt = torch.zeros((U, V, 1, H, W), device=device, dtype=noisy_lf.dtype)
@@ -369,7 +317,6 @@ def _lfbm5d_stage_fast(
     out_sum_flat = out_sum.view(U, V, C, H * W)
     out_wgt_flat = out_wgt.view(U, V, 1, H * W)
 
-    # 4) transform-domain collaborative filtering in chunks
     for s in range(0, P, transform_chunk):
         e = min(s + transform_chunk, P)
         idx_chunk = group_idx[s:e]  # [B,N]
@@ -397,29 +344,18 @@ def _lfbm5d_stage_fast(
             weights=weights,
         )
 
-    # out = out_sum / (out_wgt + 1e-8)
-    # return out
 
-    # out = out_sum / (out_wgt + 1e-8)
-    # low_mask = out_wgt < 1e-6
-    # out = torch.where(low_mask.expand_as(out), noisy_lf, out)
-    # return out
     out = out_sum / (out_wgt + 1e-8)
 
-# 低权重区域：不要直接回退到 noisy，而是先用邻域聚合结果填洞
     low_mask = out_wgt < 1e-6  # [U,V,1,H,W]
 
     if low_mask.any():
         pool_k = 5
         pad = pool_k // 2
 
-        # 把 out_sum / out_wgt 转成 2D batch 形式，便于做局部池化填洞
-        # out_sum: [U,V,C,H,W]
-        # out_wgt: [U,V,1,H,W]
         sum_2d = out_sum.contiguous().view(U * V * C, 1, H, W)
         wgt_2d = out_wgt.expand(U, V, C, H, W).contiguous().view(U * V * C, 1, H, W)
 
-        # 用局部平均传播邻域里已有的聚合结果
         sum_pool = F.avg_pool2d(sum_2d, kernel_size=pool_k, stride=1, padding=pad)
         wgt_pool = F.avg_pool2d(wgt_2d, kernel_size=pool_k, stride=1, padding=pad)
 
@@ -428,8 +364,7 @@ def _lfbm5d_stage_fast(
         low_mask_c = low_mask.expand(U, V, C, H, W)
         out = torch.where(low_mask_c, fill, out)
 
-        # 如果连邻域里都几乎没有有效权重，再回退到 match_lf
-        # 对于 Wiener stage，这里等价于回退到 basic estimate，而不是 noisy
+
         still_low = (wgt_pool.view(U, V, C, H, W) < 1e-6) & low_mask_c
         out = torch.where(still_low, match_lf, out)
 
@@ -455,43 +390,9 @@ def LFBM5D_denoiser(
     transform_chunk: int = 32,
     clip_output: bool = False,
 ):
-    """
-    Accelerated GPU-friendly LFBM5D-style denoiser.
-
-    Args:
-        lf:
-            [u,v,c,h,w] CUDA float tensor
-        sigma:
-            noise std in same scale as lf
-        patch_size:
-            spatial patch size
-        stride_hard / stride_wiener:
-            patch scanning stride
-        disp_radius_*:
-            integer disparity search radius
-        sim_radius_*:
-            local grouping radius in pixels
-        max_group_size_*:
-            number of similar 4D patches per group
-        lambda_hard:
-            hard threshold factor
-        search_chunk:
-            chunk size for disparity search / gather
-        group_pool:
-            pooled patch size for fast grouping feature
-        transform_chunk:
-            number of reference groups processed together
-        clip_output:
-            clamp to [0,1]
-
-    Returns:
-        denoised LF [u,v,c,h,w]
-    """
     _check_lf_tensor(lf)
 
-    # Backward-compatible adapter:
-    # - grayscale input [u,v,h,w] -> internally [u,v,1,h,w]
-    # - RGB/multi-channel input [u,v,c,h,w] keeps original behavior
+
     squeeze_channel = False
     if lf.ndim == 4:
         lf = lf.unsqueeze(2)
@@ -502,7 +403,6 @@ def LFBM5D_denoiser(
     if lf.shape[-2] < patch_size or lf.shape[-1] < patch_size:
         raise ValueError("patch_size must be <= h and <= w")
 
-    # Stage 1: hard-threshold basic estimate
     basic = _lfbm5d_stage_fast(
         noisy_lf=lf,
         match_lf=lf,
@@ -519,7 +419,6 @@ def LFBM5D_denoiser(
         transform_chunk=transform_chunk,
     )
 
-    # Stage 2: Wiener refinement
     denoised = _lfbm5d_stage_fast(
         noisy_lf=lf,
         match_lf=basic,
@@ -543,10 +442,3 @@ def LFBM5D_denoiser(
         denoised = denoised.squeeze(2)
 
     return denoised
-if __name__ == "__main__":
-    from utils import *
-    lf=norm(torch.load(r'LFdataset\5x5\bicycle.pt')).cuda()
-    lf=lf_downsample(lf, 2)
-    noisy=lf+torch.randn_like(lf) * 1e-1
-    denoised = LFBM5D_denoiser(noisy, sigma=1e-1)
-    Plot(norm(denoised[0,0]),is_rgb=True)

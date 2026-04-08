@@ -474,7 +474,6 @@ if __name__ == '__main__':
                     with contextlib.redirect_stdout(fnull):  
                         lf_recon_pnp = PnPreconstruct(meas_data_pnp,lf_init,A, AT, config2, Mydenoiser)
                 
-                # PnP data save
                 pnplf_path = os.path.join(save_dir,'rawdata',f'{scene_name}_num{num}_pnp_lf.pt')
                 dir_path = os.path.dirname(pnplf_path)
                 if not os.path.exists(dir_path):

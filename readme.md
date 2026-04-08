@@ -23,14 +23,14 @@ python demo_CSLIP_comparison.py
 ```
 
 ## Experiment data
-https://drive.google.com/file/d/1ApFo04zt4A5dkjB-pWpQxVmSFOWdyLKV/view?usp=sharing
+https://drive.google.com/file/d/1-KeGWHdzDsCUjUref2mu8xcZtJK8HsLi/view?usp=sharing
 
 ## Checkpoints of pretained model
 - Depth-Anything-V2: https://github.com/DepthAnything/Depth-Anything-V2
 - DRUNet: https://github.com/cszn/DPIR/tree/master
 
 
-## Repository Structure (Brief)
+## Repository Structure
 
 - `MERGE_model.py`:     Core model definitions
 - `Forward_Model.py`:   Forward model implementation
@@ -41,7 +41,7 @@ https://drive.google.com/file/d/1ApFo04zt4A5dkjB-pWpQxVmSFOWdyLKV/view?usp=shari
 - `demo_CSLIP_comparison.py`: Using the compressive light field photograph model and comparison of MERGE and PnP-FISTA
 
 
-## Quick Start (Examples)
+## Quick Start
 
 The following commands are common entry-point examples. Please adjust parameters for your experiment settings:
 

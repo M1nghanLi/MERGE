@@ -21,7 +21,6 @@ def load_model(device=None):
     nb = 15               # setting for grayscale image
     from models.network_ffdnet import FFDNet as net
     model = net(in_nc=n_channels, out_nc=n_channels, nc=nc, nb=nb, act_mode='R')
-    # 确保按目标 device 加载权重，避免默认落在 cuda:0
     state_dict = torch.load(model_path, map_location=device)
     model.load_state_dict(state_dict, strict=True)
     model.eval()
@@ -44,7 +43,6 @@ def load_model_ffdnetrgb(device=None):
     nb = 12               # setting for RGB image
     from models.network_ffdnet import FFDNet as net
     model = net(in_nc=n_channels, out_nc=n_channels, nc=nc, nb=nb, act_mode='R')
-    # 确保按目标 device 加载权重，避免默认落在 cuda:0
     state_dict = torch.load(model_path, map_location=device)
     model.load_state_dict(state_dict, strict=True)
     model.eval()
@@ -251,20 +249,7 @@ if __name__ == '__main__':
     
     plt.figure(3)
     plt.imshow(img_c_cpu2)
-    
-    #%% Test DRUNet denoising
-    # model = load_model_DRUNet()
-    # img_in = np.float32(img_gray)
-    # restored = np.zeros_like(img_in)
-    # noise_map = np.ones_like(img_in)
-    # with torch.no_grad():        
-    #     img_n = torch.from_numpy(img_in).unsqueeze(0).unsqueeze(0).cuda()
-    #     noise_torch = torch.from_numpy(noise_map).unsqueeze(0).unsqueeze(0).cuda()*1e-1
-    #     img_c = model(torch.cat([img_n, noise_torch], dim = 1))
-    #     img_c_cpu = torch.clamp(img_c,0,1).cpu().detach().squeeze(0).squeeze(0)
-    
-    # plt.figure(2)
-    # plt.imshow(img_c_cpu)
+
     
     
     

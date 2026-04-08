@@ -650,7 +650,7 @@ def save_depthimg(img, path, norm=True, cmap='RdBu'):
         img = (img - img.min()) / (img.max() - img.min() + 1e-12)
 
     if cmap is not None:
-        assert img.shape[0] == 1,
+        assert img.shape[0] == 1, "cmap only supports single-channel images"
         arr = img.squeeze(0).numpy()         
         rgb = mpl.colormaps[cmap](arr)[..., :3]
         pil_img = Image.fromarray((rgb * 255).astype(np.uint8))

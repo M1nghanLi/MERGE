@@ -15,11 +15,11 @@ from DenoisingLIB import *
 #from MyDenoisersLib import load_denoiser
 
 
-class DEQ_MURDGE(nn.Module):
-    def __init__(self, MURDGE_MLP, depthestimator, denoiser, transfomation_param, lfshape, disp_max_value):
+class DEQ_MERGE(nn.Module):
+    def __init__(self, MERGE_MLP, depthestimator, denoiser, transfomation_param, lfshape, disp_max_value):
         super().__init__()
         # register submodules / parameters
-        self.MURDGE_MLP = MURDGE_MLP
+        self.MERGE_MLP = MERGE_MLP
         self.depthestimator = depthestimator
         self.denoiser = denoiser
         # ensure transformation params are registered as nn.Parameter so they show up in .parameters()
@@ -60,9 +60,9 @@ class DEQ_MURDGE(nn.Module):
         disparity_relative = self.depthestimator(guide_img).squeeze(0)/self.disp_max_value  # shape=(h,w)
         disparity_abs = torch.tanh(self.transfomation_param[0].to(disparity_relative.device) * disparity_relative 
                                    + self.transfomation_param[1].to(disparity_relative.device))
-        # let the MURDGE_MLP handle device placement (it may be multi-GPU);
+        # let the MERGE_MLP handle device placement (it may be multi-GPU);
         # pass coordinates and disparity as-is and let the mlp move tensors to segments.
-        lf_recon_raw, _ = self.MURDGE_MLP(self.coo_im, disparity_abs)
+        lf_recon_raw, _ = self.MERGE_MLP(self.coo_im, disparity_abs)
         
         # RGB vs 灰度重排
         if lf.dim() == 4:
@@ -106,7 +106,7 @@ class DEQ_MURDGE(nn.Module):
             disparity_abs = torch.tanh(self.transfomation_param[0].to(disparity_relative.device) * disparity_relative 
                                     + self.transfomation_param[1].to(disparity_relative.device))
             # pass raw coo_im and disparity to MLP and let it manage device movement
-            lf_recon_raw, disparity_allview_raw = self.MURDGE_MLP(self.coo_im, disparity_abs)
+            lf_recon_raw, disparity_allview_raw = self.MERGE_MLP(self.coo_im, disparity_abs)
             
             # RGB vs 灰度重排
             if lf.dim() == 4:
@@ -140,7 +140,7 @@ class DEQ_MURDGE(nn.Module):
                                     + self.transfomation_param[1].to(disparity_relative.device))
         return disparity_abs
 
-def return_MURDGE_componets(config):
+def return_MERGE_componets(config):
 
     lfshape                 =config['lfshape']
     depthmodelname          =config['depthmodelname']
@@ -157,7 +157,7 @@ def return_MURDGE_componets(config):
     h,w=lfshape[-2],lfshape[-1]
 
 
-    # 1. MURDGE model
+    # 1. MERGE model
     # Multi-GPU model parallel
     mp_devices = []
     try:
@@ -183,7 +183,7 @@ def return_MURDGE_componets(config):
     # 使用改进的v2版本以获得更好的GPU负载均衡
     if len(mp_devices) > 0 :
         if config['scale_alpha_mode'] =='learned':
-            MURDGE_MLP = COLF_Wire_rand_multigpu(  
+            MERGE_MLP = COLF_Wire_rand_multigpu(  
                 input_dim=2,
                 hidden_features=hiddenfeatures,
                 hidden_layers=hiddenlayers,
@@ -199,7 +199,7 @@ def return_MURDGE_componets(config):
                 mp_devices=mp_devices
             )
         elif config['scale_alpha_mode'] =='finetune':
-            MURDGE_MLP = COLF_Wire_split_multigpu( 
+            MERGE_MLP = COLF_Wire_split_multigpu( 
                 input_dim=2,
                 hidden_features=hiddenfeatures,
                 hidden_layers=hiddenlayers,
@@ -258,7 +258,7 @@ def return_MURDGE_componets(config):
     transfomation_param = torch.ones(2, dtype=torch.float32, device=main_device) * 1e-2
     transfomation_param.requires_grad_(True)
 
-    return MURDGE_MLP, depthestimator, denoiser, transfomation_param , denoise_net
+    return MERGE_MLP, depthestimator, denoiser, transfomation_param , denoise_net
 
 def train_model(A,meas_data,config):
     main_device = config['main_device']
@@ -274,16 +274,16 @@ def train_model(A,meas_data,config):
     meas_data = meas_data.to(main_device)
     
     coo_im = coo_gen((H, W)).to(main_device)
-    components = return_MURDGE_componets(config)
-    MURDGE_MLP, depthestimator, denoiser, transfomation_param, denoise_net=components
+    components = return_MERGE_componets(config)
+    MERGE_MLP, depthestimator, denoiser, transfomation_param, denoise_net=components
 
     start_t = time.perf_counter()
     loss_func = nn.L1Loss()
     if_rgb=(len(lfshape)==5)
-    optimizer = AdamW(MURDGE_MLP.mlp_lf.parameters(), lr=lr)
+    optimizer = AdamW(MERGE_MLP.mlp_lf.parameters(), lr=lr)
 #=========================S1 coarse training========================
     for iter in range(config['S1_iter']):
-        im_raw = MURDGE_MLP.mlp_lf(coo_im)
+        im_raw = MERGE_MLP.mlp_lf(coo_im)
 
         if not if_rgb:
             im_recon = einops.rearrange(im_raw.squeeze(-1), '(h w) -> h w', h=H, w=W)
@@ -307,11 +307,11 @@ def train_model(A,meas_data,config):
     lf_input = lf_warm.detach().clone()
     init_disparity = depthestimator(norm(im_recon))
     disp_max_value = torch.max(torch.abs(init_disparity)).item()
-    DEQ_MURDGEmodel = DEQ_MURDGE(MURDGE_MLP, depthestimator, denoiser, transfomation_param, lfshape, disp_max_value).to(main_device)
+    DEQ_MERGEmodel = DEQ_MERGE(MERGE_MLP, depthestimator, denoiser, transfomation_param, lfshape, disp_max_value).to(main_device)
     deq = get_deq(core='sliced', ift=True)
     
 
-    optimizer = AdamW(DEQ_MURDGEmodel.parameters(), lr=lr)
+    optimizer = AdamW(DEQ_MERGEmodel.parameters(), lr=lr)
 
     DEQ_cycle = config.get('DEQ_cycle', 1)
     
@@ -322,14 +322,14 @@ def train_model(A,meas_data,config):
 
     if config.get('bias_start_iter', 0)!=0:
         param_groups = [
-            {'params': [p for n, p in DEQ_MURDGEmodel.named_parameters() if 'bias_img' not in n], 'lr': lr},
-            {'params': [p for n, p in DEQ_MURDGEmodel.named_parameters() if 'bias_img' in n], 'lr': 0.0}
+            {'params': [p for n, p in DEQ_MERGEmodel.named_parameters() if 'bias_img' not in n], 'lr': lr},
+            {'params': [p for n, p in DEQ_MERGEmodel.named_parameters() if 'bias_img' in n], 'lr': 0.0}
         ]
         optimizer = AdamW(param_groups)
         delayed_bias_training = True
     else:
         # Standard: optimize all parameters together
-        optimizer = AdamW(DEQ_MURDGEmodel.parameters(), lr=lr)
+        optimizer = AdamW(DEQ_MERGEmodel.parameters(), lr=lr)
         delayed_bias_training = False
 
 #==========================S2 DEQ training=========================
@@ -339,7 +339,7 @@ def train_model(A,meas_data,config):
         if delayed_bias_training and iter == config['bias_start_iter']:
             print(f"\n[Iter {iter}] Activating bias_img training (setting lr from 0 to {lr})")
             for param_group in optimizer.param_groups:
-                if any('bias_img' in n for n, p in DEQ_MURDGEmodel.named_parameters() 
+                if any('bias_img' in n for n, p in DEQ_MERGEmodel.named_parameters() 
                        if any(p is param for param in param_group['params'])):
                     param_group['lr'] = lr
 
@@ -348,19 +348,19 @@ def train_model(A,meas_data,config):
         #if (iter % DEQ_cycle == 0)  and (iter >= config['DEQstart_iter'] and (iter<config['S2_iter']-50)):
         if (iter % DEQ_cycle == 0)  and (iter >= config['DEQstart_iter']):
             torch.cuda.empty_cache()
-            z_out, _ = deq(DEQ_MURDGEmodel, lf_input,
+            z_out, _ = deq(DEQ_MERGEmodel, lf_input,
                             solver_kwargs=dict(f_solver='anderson'),
                             stop_mode='abs')
             lf_star = z_out[-1]
             with torch.no_grad():
-                residual = torch.mean(torch.abs((lf_star-DEQ_MURDGEmodel(lf_star))))
+                residual = torch.mean(torch.abs((lf_star-DEQ_MERGEmodel(lf_star))))
                 #lf_input = lf_star.detach().clone()
                 
         else:
-            lf_star = DEQ_MURDGEmodel(lf_input)
+            lf_star = DEQ_MERGEmodel(lf_input)
             with torch.no_grad():
                 #residual = torch.mean(torch.abs((lf_star-lf_input)))
-                residual = torch.mean(torch.abs((lf_star-DEQ_MURDGEmodel(lf_star))))
+                residual = torch.mean(torch.abs((lf_star-DEQ_MERGEmodel(lf_star))))
         
         meas_hat = A(lf_star.to(main_device, non_blocking=True))
 
@@ -386,36 +386,36 @@ def train_model(A,meas_data,config):
     stop_t = time.perf_counter()
     print('total_train_time: {}s'.format(stop_t - start_t))
     with torch.no_grad():
-        final_lf, final_disparity_full = DEQ_MURDGEmodel.forward_full(lf_star)
-    k = MURDGE_MLP.compute_scale_alpha()
+        final_lf, final_disparity_full = DEQ_MERGEmodel.forward_full(lf_star)
+    k = MERGE_MLP.compute_scale_alpha()
     print(k)
 
-    return final_lf.detach(), final_disparity_full.detach(), DEQ_MURDGEmodel #shape=(nu,nv,h,w), (nview,h,w,2)
+    return final_lf.detach(), final_disparity_full.detach(), DEQ_MERGEmodel #shape=(nu,nv,h,w), (nview,h,w,2)
 
 
 
 
 if __name__ == '__main__':
 
-    save_dir = f'test'
+    save_dir = f'CLIP_output'
 
 
-    gpu_id = 4
+    gpu_id = 1
     device = f'cuda:{gpu_id}'
-    codes,meas_data,A,AT,lfresolution,lf_data = get_SinglePixelImagingMeasurement(scene=f'scene{1}_LF_Data_SPC.mat', device=device)
+    codes,meas_data,A,AT,lfresolution,lf_data = get_SinglePixelImagingMeasurement(scene=f'scene{2}_LF_Data_SPC.mat', device=device)
     
     #meas_data = (meas_data + torch.randn_like(meas_data)*noise_level/2).clamp_(min=0)
 
     lfshape=lf_data.shape
     u,v,h,w=lfshape
-#============ MURDGE Reconstruct ==============
-    print(f'Start MURDGE Reconstruct...')
+#============ MERGE Reconstruct ==============
+    print(f'Start MERGE Reconstruct...')
     config = {}
 
     config['save_dir']          = save_dir
     config['lfshape']           = lfshape
-    config['lr']                = 1e-3
-    config['S1_iter']           = 600
+    config['lr']                = 5e-3
+    config['S1_iter']           = 400
     config['S2_iter']           = 200   #实验数据120
     config['gpu_list']          = [gpu_id]
     config['main_device']       = config['gpu_list'][0]
@@ -424,7 +424,7 @@ if __name__ == '__main__':
     config['depthmodelname']    = 'depthanythingb'  
     # 'depthanythingb'/'depthanythingl'/'depthanythings'/'zoedepth'/'vggt' / 'depthanything3gl'/'depthanything3l'/'depthpro'
     config['denoiser']          = 'ffdnet'
-    config['lambda']            = 6e-2  #6e-2
+    config['lambda']            = 9e-2  #6e-2
     config['MLPhiddenlayers']   = 3
     config['MLPhiddenfeatures'] = 256   #实验数据256
     config['MLPomega0']         = 5.0  #实验数据10
@@ -437,26 +437,29 @@ if __name__ == '__main__':
     config['scale_alpha_mode']  = 'learned' # 'finetune' or 'learned'
     #with open(os.devnull, 'w') as fnull: 
         #with contextlib.redirect_stdout(fnull): 
-    lf_murdge, final_disparity_full, DEQ_MURDGEmodel = train_model(A,meas_data.to(config['main_device']),config)
+    lf_merge, final_disparity_full, DEQ_MERGEmodel = train_model(A,meas_data.to(config['main_device']),config)
     
-    #MURDGE data save
+    #MERGE data save
     #1,raw data
     disparity_path = os.path.join(save_dir,'rawdata',f'disparity.pt')
     dir_path = os.path.dirname(disparity_path)
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
-    lf_path = os.path.join(save_dir,'rawdata',f'murdge_lf.pt')
-    torch.save(lf_murdge,lf_path)
+    lf_path = os.path.join(save_dir,'rawdata',f'merge_lf.pt')
+    torch.save(lf_merge,lf_path)
     torch.save(final_disparity_full,disparity_path)
     #2,disparity img
-    k = DEQ_MURDGEmodel.MURDGE_MLP.compute_scale_alpha()
+    k = DEQ_MERGEmodel.MERGE_MLP.compute_scale_alpha()
     finaldisparity = disp_allview_to_disparity(final_disparity_full)
 
 
 
-    save_img(lf_murdge[u//2,v//2], os.path.join(save_dir,f'sub_murdge.png'))
+    save_img(lf_merge[u//2,v//2], os.path.join(save_dir,f'sub_merge.png'))
     #save_depthimg(finaldisparity,os.path.join(save_dir,f'disparity_num{num}.png'))
     Plot(finaldisparity.cpu().detach().squeeze(), cmap='RdBu',savepath=os.path.join(save_dir,f'disparity.png'))
-    light_field_to_gif(norm(lf_murdge), os.path.join(save_dir,f'lfgif.gif'))
-    light_field_to_video_hq(norm(lf_murdge), os.path.join(save_dir,f'lfvideo.mp4'))
+    light_field_to_gif(norm(lf_merge), os.path.join(save_dir,f'lfgif.gif'))
+    light_field_to_video_hq(norm(lf_merge), os.path.join(save_dir,f'lfvideo.mp4'))
+
+    psnr_merge = psnr_torch(norm(lf_merge),norm(lf_data), 1.0)
+    print(f'PSNR (MERGE): {psnr_merge:.2f} dB')
 

@@ -50,8 +50,6 @@ class DEQ_MURDGE(nn.Module):
         else:
             self.transfomation_param = torch.nn.Parameter(transfomation_param)
         self.coo_im = coo_gen((lfshape[-2], lfshape[-1]))
-
-        #生成一个[h,w]形状的待优化变量
         if len(lfshape)==4:
             H, W=lfshape[-2], lfshape[-1]
             self.bias_img = torch.nn.Parameter(torch.zeros(1, 1, H, W))
@@ -71,35 +69,23 @@ class DEQ_MURDGE(nn.Module):
             guide_img = guide_img + bias_on_device
             guide_img = guide_img.expand(1, 3, -1, -1)
         elif lf.dim() == 5:
-            # RGB模式: lf shape = [nu, nv, 3, h, w]
             guide_img = lf[u//2,v//2].clone().unsqueeze(0)  # [1, 3, h, w]
             bias_on_device = self.bias_img.to(guide_img.device, non_blocking=True)
             guide_img = guide_img + bias_on_device
             
-        
-        #===========test========
-        # lflf = lf.clone()
-        # lflf[u//2,v//2] = guide_img.squeeze(0)
-        # lflf = einops.rearrange(lflf, 'nu nv c h w -> (nu nv) c h w')
-        # disparity_relative = self.depthestimator(lflf).squeeze(0)/self.disp_max_value  # shape=(h,w)
 
         #=======================
         disparity_relative = self.depthestimator(guide_img).squeeze(0)/self.disp_max_value  # shape=(h,w)
         disparity_abs = torch.tanh(self.transfomation_param[0].to(disparity_relative.device) * disparity_relative 
                                    + self.transfomation_param[1].to(disparity_relative.device))
-        # let the MURDGE_MLP handle device placement (it may be multi-GPU);
-        # pass coordinates and disparity as-is and let the mlp move tensors to segments.
+
         lf_recon_raw, _ = self.MURDGE_MLP(self.coo_im, disparity_abs)
         
-        # RGB vs 灰度重排
         if lf.dim() == 4:
-            # 灰度: lf_recon_raw shape = [(nu*nv*h*w), 1]
             lf_recon = einops.rearrange(lf_recon_raw.squeeze(-1), '(nu nv h w) -> nu nv h w', nu=u, h=h, w=w)
         else:
-            # RGB: lf_recon_raw shape = [(nu*nv*h*w), 3]
             lf_recon = einops.rearrange(lf_recon_raw, '(nu nv h w) c -> nu nv c h w', nu=u, nv=v, h=h, w=w, c=3)
         
-        # call denoiser (it should internally handle device), then move to input lf device
         lf_recon = self.denoiser(lf_recon).to(lf.device)
 
         return lf_recon
@@ -110,37 +96,26 @@ class DEQ_MURDGE(nn.Module):
             h,w = lf.shape[-2:]
             if lf.dim() == 4:
                 guide_img = lf[u//2,v//2].clone().unsqueeze(0).unsqueeze(0)
-                # Move bias to guide_img's device (for consistency with forward)
+
                 bias_on_device = self.bias_img.to(guide_img.device, non_blocking=True)
                 guide_img = guide_img + bias_on_device
                 guide_img = guide_img.expand(1, 3, -1, -1)
             elif lf.dim() == 5:
-                # RGB模式: lf shape = [nu, nv, 3, h, w]
                 guide_img = lf[u//2,v//2].clone().unsqueeze(0)  # [1, 3, h, w]
-                # Move bias to guide_img's device (for consistency with forward)
+
                 bias_on_device = self.bias_img.to(guide_img.device, non_blocking=True)
                 guide_img = guide_img + bias_on_device
-            #===========test========
-            # lflf = lf.clone()
-            # lflf[u//2,v//2] = guide_img.squeeze(0)
-            # lflf = einops.rearrange(lflf, 'nu nv c h w -> (nu nv) c h w')
-            # disparity_relative = self.depthestimator(lflf).squeeze(0)/self.disp_max_value  # shape=(h,w)
 
-            #=======================
- 
             
             disparity_relative = self.depthestimator(guide_img).squeeze(0)/self.disp_max_value  # shape=(h,w)
             disparity_abs = torch.tanh(self.transfomation_param[0].to(disparity_relative.device) * disparity_relative 
                                     + self.transfomation_param[1].to(disparity_relative.device))
-            # pass raw coo_im and disparity to MLP and let it manage device movement
+
             lf_recon_raw, disparity_allview_raw = self.MURDGE_MLP(self.coo_im, disparity_abs)
             
-            # RGB vs 灰度重排
             if lf.dim() == 4:
-                # 灰度
                 lf_recon = einops.rearrange(lf_recon_raw.squeeze(-1), '(nu nv h w) -> nu nv h w', nu=u, h=h, w=w)
             else:
-                # RGB
                 lf_recon = einops.rearrange(lf_recon_raw, '(nu nv h w) c -> nu nv c h w', nu=u, nv=v, h=h, w=w, c=3)
             
             lf_recon = self.denoiser(lf_recon).to(lf.device)
@@ -157,7 +132,6 @@ class DEQ_MURDGE(nn.Module):
                 guide_img = guide_img + bias_on_device
                 guide_img = guide_img.expand(1, 3, -1, -1)
             elif lf.dim() == 5:
-                # RGB模式: lf shape = [nu, nv, 3, h, w]
                 guide_img = lf[u//2,v//2].clone().unsqueeze(0)  # [1, 3, h, w]
                 # Move bias to guide_img's device (for consistency with forward)
                 bias_on_device = self.bias_img.to(guide_img.device, non_blocking=True)
@@ -221,7 +195,7 @@ def return_MURDGE_componets(config):
                 hash_length=(h, w),
                 omega_0=omega0,
                 sigma_0=sigma0,
-                need_split=True,  # 多GPU时通常不需要chunk分割
+                need_split=True,  
                 mirror=config.get('MLP_mirror', False),
                 device=main_device,
                 chunk_size=2**12,
@@ -237,11 +211,9 @@ def return_MURDGE_componets(config):
                 hash_length=(h, w),
                 omega_0=omega0,
                 sigma_0=sigma0,
-                need_split=True,  # 多GPU时通常不需要chunk分割
+                need_split=True,  
                 mirror=config.get('MLP_mirror', False),
                 device=main_device,
-                # NOTE: chunk_size too large (e.g. 2**19) can OOM during checkpoint recompute on hidden_features=256.
-                # Make it configurable; default to a safer value.
                 chunk_size=config.get('mlp_chunk_size', 2**17),
                 mp_devices=mp_devices
             )
@@ -319,8 +291,7 @@ def train_model(A,meas_data,config):
         amp_dtype = torch.float16
     else:
         amp_dtype = torch.bfloat16
-    
-    # 确保 meas_data 在正确的设备上
+
     meas_data = meas_data.to(main_device)
     
     coo_im = coo_gen((H, W)).to(main_device)
@@ -414,16 +385,11 @@ def train_model(A,meas_data,config):
                             solver_kwargs=dict(f_solver='anderson'),
                             stop_mode='abs')
             lf_star = z_out[-1]
-            with torch.no_grad():
-                # Avoid an extra full forward for residual (can double peak memory).
-                residual = torch.mean(torch.abs(lf_star - lf_input))
-                #lf_input = lf_star.detach().clone()
                 
         else:
             with torch.autocast(device_type='cuda', enabled=amp_enabled, dtype=amp_dtype):
                 lf_star = DEQ_MURDGEmodel(lf_input)
-            with torch.no_grad():
-                residual = torch.mean(torch.abs(lf_star - lf_input))
+
         
 
         with torch.autocast(device_type='cuda', enabled=amp_enabled, dtype=amp_dtype):
@@ -438,7 +404,7 @@ def train_model(A,meas_data,config):
 
         
 
-        print(f'Iter:{iter}/{config["S2_iter"]}, loss:{loss.item():.5f} residual:{residual.item():.2e}')
+        print(f'Iter:{iter}/{config["S2_iter"]}, loss:{loss.item():.5f}')
 
     stop_t = time.perf_counter()
     print('total_train_time: {}s'.format(stop_t - start_t))
@@ -475,8 +441,7 @@ if __name__ == '__main__':
     config['spaticl_dec']       = spatial_dec
     config['lr']                = 1e-3
     config['S1_iter']           = 300
-    config['S2_iter']           = 150   #实验数据120
-    #config['vignetting_path']   = 'CA_exp/RAWdata/20251223data/vignet'
+    config['S2_iter']           = 150  
     config['depthmodelname']    = 'depthanythingb'  # 'depthanythingb'/'depthanythingl'/'depthanythings'/'zoedepth'/'vggt'/'Metric3D'/'DepthPro'
     config['denoiser']          = 'drunet_rgb'
     config['lambda']            = 6e-2  

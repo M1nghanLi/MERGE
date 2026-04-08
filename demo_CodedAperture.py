@@ -18,12 +18,6 @@ from DenoisingLIB import *
 
 
 def _forward_in_chunks(net: nn.Module, x: torch.Tensor, chunk_size: int) -> torch.Tensor:
-    """Forward a (potentially huge) 2D coordinate batch through `net` in chunks.
-
-    This is used to avoid single-GPU OOM when evaluating `mlp_lf` on full-resolution
-    coordinates (e.g. 1400x1400). It does NOT use checkpointing and does NOT change
-    the configured chunk size; it simply iterates.
-    """
     if chunk_size <= 0:
         raise ValueError(f"chunk_size must be positive, got {chunk_size}")
     outs = []

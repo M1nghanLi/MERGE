@@ -13,7 +13,7 @@ from torchdeq.core import get_deq
 #from Fast_REDPRO_solver import *
 from DenoisingLIB import *
 
-gpu_list          = [1]
+gpu_list          = [0]
 main_device = torch.device(f'cuda:{gpu_list[0]}' if torch.cuda.is_available() else 'cpu')
 depth_device = torch.device(f'cuda:{gpu_list[0]}' if torch.cuda.is_available() else 'cpu')
 denoiser_device = torch.device(f'cuda:{gpu_list[-1]}' if torch.cuda.is_available() else 'cpu')

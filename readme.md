@@ -51,13 +51,6 @@ python demo_CodedAperture.py
 python demo_CSLIP_comparison.py
 ```
 
-You should choose the correct GPU devices for reconstruction
-The experimental data from the Coded Aperture experiment is relatively large. For ease of demonstration, the script uses a default setting of 4x downsampling before light field reconstruction, and the disparity-depth conversion data has been correspondingly matched.
+You should choose the correct GPU devices for reconstruction.The experimental data from the Coded Aperture experiment is relatively large. For ease of demonstration, the script uses a default setting of 4x downsampling before light field reconstruction, and the disparity-depth conversion data has been correspondingly matched. If your GPU resources are limited, you can adjust the `spatial_dec` parameter to apply stronger spatial downsampling, or appropriately reduce the number of MLP parameters (though this may affect reconstruction quality).
 
-## Outputs and Visualization
 
-Typical outputs include:
-
-- Reconstructed images/videos (e.g., png, gif, mp4)
-- Disparity/depth maps
-- Light-field tensors (`.pt`)
